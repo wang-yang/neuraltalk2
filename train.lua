@@ -5,7 +5,7 @@ require 'nngraph'
 -- exotic things
 require 'loadcaffe'
 -- local imports
-local utils = require 'misc.utils'
+local utils = require 'misc.utils' -- local is much faster
 require 'misc.DataLoader'
 require 'misc.LanguageModel'
 local net_utils = require 'misc.net_utils'

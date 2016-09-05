@@ -47,11 +47,15 @@ function net_utils.prepro(imgs, data_augment, on_gpu)
   assert(on_gpu ~= nil, 'pass this in. careful here.')
 
   local h,w = imgs:size(3), imgs:size(4)
+  --print("h: ", h)
+  --print("w: ", w)
   local cnn_input_size = 224
 
   -- cropping data augmentation, if needed
   if h > cnn_input_size or w > cnn_input_size then 
     local xoff, yoff
+    --print("data_augment: ", data_augment)
+    -- 没有使用data_augment
     if data_augment then
       xoff, yoff = torch.random(w-cnn_input_size), torch.random(h-cnn_input_size)
     else
@@ -59,11 +63,14 @@ function net_utils.prepro(imgs, data_augment, on_gpu)
       xoff, yoff = math.ceil((w-cnn_input_size)/2), math.ceil((h-cnn_input_size)/2)
     end
     -- crop.
+    -- 以图片中心做剪裁
     imgs = imgs[{ {}, {}, {yoff,yoff+cnn_input_size-1}, {xoff,xoff+cnn_input_size-1} }]
   end
 
   -- ship to gpu or convert from byte to float
   if on_gpu then imgs = imgs:cuda() else imgs = imgs:float() end
+
+  --print("imgs after crop to 224 px: ", imgs)
 
   -- lazily instantiate vgg_mean
   if not net_utils.vgg_mean then

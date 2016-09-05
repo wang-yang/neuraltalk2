@@ -72,6 +72,7 @@ function DataLoaderRaw:getBatch(opt)
   local max_index = self.N
   local wrapped = false
   local infos = {}
+  print("Check batch_size: ", batch_size)
   for i=1,batch_size do
     local ri = self.iterator
     local ri_next = ri + 1 -- increment iterator
@@ -81,6 +82,7 @@ function DataLoaderRaw:getBatch(opt)
     -- load the image
     local img = image.load(self.files[ri], 3, 'byte')
     img_batch_raw[i] = image.scale(img, 256, 256)
+    --print("img: ", img_batch_raw[i])
 
     -- and record associated info as well
     local info_struct = {}
@@ -93,5 +95,6 @@ function DataLoaderRaw:getBatch(opt)
   data.images = img_batch_raw
   data.bounds = {it_pos_now = self.iterator, it_max = self.N, wrapped = wrapped}
   data.infos = infos
+  --print("getBatch() return: ", data)
   return data
 end

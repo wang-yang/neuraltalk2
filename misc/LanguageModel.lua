@@ -44,13 +44,14 @@ end
 
 function layer:createClones()
   -- construct the net clones
-  print('constructing clones inside the LanguageModel')
+  --print('constructing clones inside the LanguageModel')
   self.clones = {self.core}
   self.lookup_tables = {self.lookup_table}
   for t=2,self.seq_length+2 do
     self.clones[t] = self.core:clone('weight', 'bias', 'gradWeight', 'gradBias')
     self.lookup_tables[t] = self.lookup_table:clone('weight', 'gradWeight')
   end
+  --print('LanguageModel Loaded')
 end
 
 function layer:getModulesList()
