@@ -81,6 +81,6 @@ end
 
 turbo.web.Application({
   {"/hello", HelloWorldHandler},
-  {"/feed_to_model", Feed2ModelHandler}
+  {"/feed_to_model", Feed2ModelHandler},
 }):listen(8888)
 turbo.ioloop.instance():start()
