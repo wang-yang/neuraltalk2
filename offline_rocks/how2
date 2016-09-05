@@ -1,0 +1,7 @@
+turbo
+  if failed find ssl.h, need to add /usr/local/opt/openssl/include into Makefiles
+  INC_SSL = -I/usr/local/opt/openssl/include/
+  add INC_SSL behind INC
+socket
+  download tar, and copy rockspec to luasocket-2.0.2-6.rockspec
+  I already tar it into luasock
