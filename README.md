@@ -1,6 +1,16 @@
 
 # NeuralTalk2
 
+## My fork version changes:
+
+### Neuraltalks2 web service
+
+Add web service for neuraltalks2, see webservice.th.  
+It depends turbo (lua web service framework), install it `luarocks install turbo` or download tarball and install it locally.  
+Start web service by(CPU mode): `th webservice.lua -model model/model_id.t7_cpu.t7 -gpuid -1`  
+
+## ====
+
 Recurrent Neural Network captions your images. Now much faster and better than the original [NeuralTalk](https://github.com/karpathy/neuraltalk). Compared to the original NeuralTalk this implementation is **batched, uses Torch, runs on a GPU, and supports CNN finetuning**. All of these together result in quite a large increase in training speed for the Language Model (~100x), but overall not as much because we also have to forward a VGGNet. However, overall very good models can be trained in 2-3 days, and they show a much better performance.
 
 This is an early code release that works great but is slightly hastily released and probably requires some code reading of inline comments (which I tried to be quite good with in general). I will be improving it over time but wanted to push the code out there because I promised it to too many people.
