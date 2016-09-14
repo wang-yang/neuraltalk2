@@ -1,3 +1,5 @@
 eval: 
   th eval.lua -gpuid -1 -model model/model_id1-501-1448236541.t7_cpu.t7 -image_folder images/ -num_images 2
+web service:
+  th webservice.lua -model model/model_id1-501-1448236541.t7_cpu.t7 -gpuid -1
   
