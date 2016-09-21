@@ -8,8 +8,6 @@ local utils = require 'misc.utils'
 require 'misc.DataLoader'
 require 'misc.DataLoaderRaw'
 require 'misc.LanguageModel'
-
---local dbg = require('debugger')
 local net_utils = require 'misc.net_utils'
 
 -------------------------------------------------------------------------------
@@ -68,23 +66,16 @@ end
 -- Load the model checkpoint to evaluate
 -------------------------------------------------------------------------------
 assert(string.len(opt.model) > 0, 'must provide a model')
-print("opt.model: ",opt.model)
 local checkpoint = torch.load(opt.model)
 -- override and collect parameters
 if string.len(opt.input_h5) == 0 then opt.input_h5 = checkpoint.opt.input_h5 end
 if string.len(opt.input_json) == 0 then opt.input_json = checkpoint.opt.input_json end
 if opt.batch_size == 0 then opt.batch_size = checkpoint.opt.batch_size end
-print("opt.input_h5: ",opt.input_h5)
-print("opt.input_json: ",opt.input_json)
-print("opt.batch_size: ",opt.batch_size)
 local fetch = {'rnn_size', 'input_encoding_size', 'drop_prob_lm', 'cnn_proto', 'cnn_model', 'seq_per_img'}
 for k,v in pairs(fetch) do 
   opt[v] = checkpoint.opt[v] -- copy over options from model
-  print("opt[v]: ", v, opt[v])
 end
 local vocab = checkpoint.vocab -- ix -> word mapping
---print("vocab: ", vocab) print like {298 : "cream"}
-
 
 -------------------------------------------------------------------------------
 -- Create the Data Loader instance
@@ -93,18 +84,15 @@ local loader
 if string.len(opt.image_folder) == 0 then
   loader = DataLoader{h5_file = opt.input_h5, json_file = opt.input_json}
 else
-  print("image_folder: ", opt.image_folder)
-  print("coco_json: ", opt.coco_json)
   loader = DataLoaderRaw{folder_path = opt.image_folder, coco_json = opt.coco_json}
 end
-
 
 -------------------------------------------------------------------------------
 -- Load the networks from model checkpoint
 -------------------------------------------------------------------------------
 local protos = checkpoint.protos
-protos.expander = nn.FeatExpander(opt.seq_per_img) -- class FeatExpander in net_utils.lua
-protos.crit = nn.LanguageModelCriterion() -- class LanguageModelCriterion in LanguageModel.lua
+protos.expander = nn.FeatExpander(opt.seq_per_img)
+protos.crit = nn.LanguageModelCriterion()
 protos.lm:createClones() -- reconstruct clones inside the language model
 if opt.gpuid >= 0 then for k,v in pairs(protos) do v:cuda() end end
 
@@ -126,19 +114,14 @@ local function eval_split(split, evalopt)
 
     -- fetch a batch of data
     local data = loader:getBatch{batch_size = opt.batch_size, split = split, seq_per_img = opt.seq_per_img}
-    -- data 中包含了图片的信息, 用数字表示了像素
-    -- net_utils.prepro 用于预处理
     data.images = net_utils.prepro(data.images, false, opt.gpuid >= 0) -- preprocess in place, and don't augment
     n = n + data.images:size(1)
 
     -- forward the model to get loss
     local feats = protos.cnn:forward(data.images)
-    --print("CNN features length: ", feats)
 
     -- evaluate loss if we have the labels
     local loss = 0
-    --print("data.labels: ", data.labels)
-    --没有data.labels
     if data.labels then
       local expanded_feats = protos.expander:forward(feats)
       local logprobs = protos.lm:forward{expanded_feats, data.labels}
@@ -149,9 +132,8 @@ local function eval_split(split, evalopt)
 
     -- forward the model to also get generated samples for each image
     local sample_opts = { sample_max = opt.sample_max, beam_size = opt.beam_size, temperature = opt.temperature }
-    local seq = protos.lm:sample(feats, sample_opts) -- 这里做出预测
-    local sents = net_utils.decode_sequence(vocab, seq)  -- 这里得到句子
-    print("sents: ", sents)
+    local seq = protos.lm:sample(feats, sample_opts)
+    local sents = net_utils.decode_sequence(vocab, seq)
     for k=1,#sents do
       local entry = {image_id = data.infos[k].id, caption = sents[k]}
       if opt.dump_path == 1 then
@@ -188,7 +170,6 @@ local function eval_split(split, evalopt)
   return loss_sum/loss_evals, predictions, lang_stats
 end
 
-print("opt.split: ", opt.split)
 local loss, split_predictions, lang_stats = eval_split(opt.split, {num_images = opt.num_images})
 print('loss: ', loss)
 if lang_stats then

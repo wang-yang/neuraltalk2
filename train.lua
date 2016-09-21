@@ -5,7 +5,7 @@ require 'nngraph'
 -- exotic things
 require 'loadcaffe'
 -- local imports
-local utils = require 'misc.utils' -- local is much faster
+local utils = require 'misc.utils'
 require 'misc.DataLoader'
 require 'misc.LanguageModel'
 local net_utils = require 'misc.net_utils'
@@ -107,30 +107,39 @@ else
   -- create protos from scratch
   -- intialize language model
   local lmOpt = {}
-  lmOpt.vocab_size = loader:getVocabSize()
-  lmOpt.input_encoding_size = opt.input_encoding_size
-  lmOpt.rnn_size = opt.rnn_size
+  lmOpt.vocab_size = loader:getVocabSize() --9567
+  lmOpt.input_encoding_size = opt.input_encoding_size --512
+  lmOpt.rnn_size = opt.rnn_size --512
   lmOpt.num_layers = 1
-  lmOpt.dropout = opt.drop_prob_lm
-  lmOpt.seq_length = loader:getSeqLength()
-  lmOpt.batch_size = opt.batch_size * opt.seq_per_img
-  protos.lm = nn.LanguageModel(lmOpt)
+  lmOpt.dropout = opt.drop_prob_lm --0.5
+  lmOpt.seq_length = loader:getSeqLength() --16
+  lmOpt.batch_size = opt.batch_size * opt.seq_per_img --16*5
+  protos.lm = nn.LanguageModel(lmOpt) --初始化rnn(core是lstm)
+
   -- initialize the ConvNet
-  local cnn_backend = opt.backend
+  local cnn_backend = opt.backend --cudnn
   if opt.gpuid == -1 then cnn_backend = 'nn' end -- override to nn if gpu is disabled
-  local cnn_raw = loadcaffe.load(opt.cnn_proto, opt.cnn_model, cnn_backend)
-  protos.cnn = net_utils.build_cnn(cnn_raw, {encoding_size = opt.input_encoding_size, backend = cnn_backend})
+  local cnn_raw = loadcaffe.load(opt.cnn_proto, opt.cnn_model, cnn_backend) --model/VGG_ILSVRC_16_layers_deploy.prototxt, 
+                                                                            --model/VGG_ILSVRC_16_layers.caffemodel
+  protos.cnn = net_utils.build_cnn(cnn_raw, {encoding_size = opt.input_encoding_size, backend = cnn_backend}) --512, cudnn
+  print(":: train, cnn: ", protos.cnn)
+
   -- initialize a special FeatExpander module that "corrects" for the batch number discrepancy 
   -- where we have multiple captions per one image in a batch. This is done for efficiency
   -- because doing a CNN forward pass is expensive. We expand out the CNN features for each sentence
-  protos.expander = nn.FeatExpander(opt.seq_per_img)
+  protos.expander = nn.FeatExpander(opt.seq_per_img) --in net_utils.lua, seq_per_img=5
+
   -- criterion for the language model
-  protos.crit = nn.LanguageModelCriterion()
+  protos.crit = nn.LanguageModelCriterion() --in LanguageModel.lua
 end
+
 
 -- ship everything to GPU, maybe
 if opt.gpuid >= 0 then
-  for k,v in pairs(protos) do v:cuda() end
+  for k,v in pairs(protos) do 
+    print(":: train, key of protos: ", k)
+    v:cuda() 
+  end
 end
 
 -- flatten and prepare all model parameters to a single vector. 
@@ -149,6 +158,7 @@ local thin_lm = protos.lm:clone()
 thin_lm.core:share(protos.lm.core, 'weight', 'bias') -- TODO: we are assuming that LM has specific members! figure out clean way to get rid of, not modular.
 thin_lm.lookup_table:share(protos.lm.lookup_table, 'weight', 'bias')
 local thin_cnn = protos.cnn:clone('weight', 'bias')
+
 -- sanitize all modules of gradient storage so that we dont save big checkpoints
 net_utils.sanitize_gradients(thin_cnn)
 local lm_modules = thin_lm:getModulesList()
@@ -158,6 +168,7 @@ for k,v in pairs(lm_modules) do net_utils.sanitize_gradients(v) end
 -- all the way here at the end because calls such as :cuda() and
 -- :getParameters() reshuffle memory around.
 protos.lm:createClones()
+
 
 collectgarbage() -- "yeah, sure why not"
 -------------------------------------------------------------------------------
@@ -179,6 +190,11 @@ local function eval_split(split, evalopt)
 
     -- fetch a batch of data
     local data = loader:getBatch{batch_size = opt.batch_size, split = split, seq_per_img = opt.seq_per_img}
+    --data包括images, labels, bounds, infos
+    --训练数据包括在images和labels中
+    --images是(16,3,256,256)的tensor, 16个图片
+    --labels是(16,16*5)的tensor, 前一个16是每个caption有16个单词, 后一个16是图片个数
+
     data.images = net_utils.prepro(data.images, false, opt.gpuid >= 0) -- preprocess in place, and don't augment
     n = n + data.images:size(1)
 
@@ -226,9 +242,9 @@ end
 -------------------------------------------------------------------------------
 local iter = 0
 local function lossFun()
-  protos.cnn:training()
+  protos.cnn:training() -- set mode of Module to train=true
   protos.lm:training()
-  grad_params:zero()
+  grad_params:zero() -- file the tensor with zeros
   if opt.finetune_cnn_after >= 0 and iter >= opt.finetune_cnn_after then
     cnn_grad_params:zero()
   end
@@ -237,17 +253,29 @@ local function lossFun()
   -- Forward pass
   -----------------------------------------------------------------------------
   -- get batch of data  
-  local data = loader:getBatch{batch_size = opt.batch_size, split = 'train', seq_per_img = opt.seq_per_img}
+  local data = loader:getBatch{batch_size = opt.batch_size, split = 'train', seq_per_img = opt.seq_per_img} -- batch_size=16, seq_per_img=16
+    --data包括images, labels, bounds, infos
+    --训练数据包括在images和labels中
+    --images是(16,3,256,256)的tensor, 16个图片
+    --labels是(16,16*5)的tensor, 前一个16是每个caption有16个单词, 后一个16是图片个数
+  
   data.images = net_utils.prepro(data.images, true, opt.gpuid >= 0) -- preprocess in place, do data augmentation
   -- data.images: Nx3x224x224 
-  -- data.seq: LxM where L is sequence length upper bound, and M = N*seq_per_img
+  -- data.labels: L x M where L is sequence length upper bound, and M = N *seq_per_img
+  --              16                                                M = 16*5
 
   -- forward the ConvNet on images (most work happens here)
   local feats = protos.cnn:forward(data.images)
+  --print(":: train, feats", feats:size())  -- (16,512) 16个图片
+
   -- we have to expand out image features, once for each sentence
+  -- feats是(16,512)的Tensor, 表示16个图片的图像特征, 经过expander层后, 变成(16*5,512)的Tensor, 把原来的每个图片对应的512图像特征复制5份
   local expanded_feats = protos.expander:forward(feats)
+
   -- forward the language model
-  local logprobs = protos.lm:forward{expanded_feats, data.labels}
+  local logprobs = protos.lm:forward{expanded_feats, data.labels} -- (16*5,512) 16个图,每个图扩展5个(和5个caption对齐),一个图512维图像特征
+                                                                  -- (16,16*5)  每个caption 16个单词, 16个图*每个图5个caption
+
   -- forward the language model criterion
   local loss = protos.crit:forward(logprobs, data.labels)
   
@@ -256,8 +284,10 @@ local function lossFun()
   -----------------------------------------------------------------------------
   -- backprop criterion
   local dlogprobs = protos.crit:backward(logprobs, data.labels)
+
   -- backprop language model
   local dexpanded_feats, ddummy = unpack(protos.lm:backward({expanded_feats, data.labels}, dlogprobs))
+
   -- backprop the CNN, but only if we are finetuning
   if opt.finetune_cnn_after >= 0 and iter >= opt.finetune_cnn_after then
     local dfeats = protos.expander:backward(feats, dexpanded_feats)
@@ -281,6 +311,7 @@ local function lossFun()
   return losses
 end
 
+print(':: train, Start main loop')
 -------------------------------------------------------------------------------
 -- Main loop
 -------------------------------------------------------------------------------
@@ -299,10 +330,10 @@ while true do
   print(string.format('iter %d: %f', iter, losses.total_loss))
 
   -- save checkpoint once in a while (or on final iteration)
-  if (iter % opt.save_checkpoint_every == 0 or iter == opt.max_iters) then
-
+  if (iter % opt.save_checkpoint_every == 0 or iter == opt.max_iters) then --2500,-1
+    print(":: train mainloop: Save checkpoint and evaluate the validation performace every: ",opt.save_checkpoint_every)
     -- evaluate the validation performance
-    local val_loss, val_predictions, lang_stats = eval_split('val', {val_images_use = opt.val_images_use})
+    local val_loss, val_predictions, lang_stats = eval_split('val', {val_images_use = opt.val_images_use}) --3200(test use 10)
     print('validation loss: ', val_loss)
     print(lang_stats)
     val_loss_history[iter] = val_loss
@@ -348,19 +379,20 @@ while true do
         print('wrote checkpoint to ' .. checkpoint_path .. '.t7')
       end
     end
+    print(":: train mainloop, Finish save checkpoint")
   end
 
   -- decay the learning rate for both LM and CNN
-  local learning_rate = opt.learning_rate
-  local cnn_learning_rate = opt.cnn_learning_rate
-  if iter > opt.learning_rate_decay_start and opt.learning_rate_decay_start >= 0 then
+  local learning_rate = opt.learning_rate --4e-4
+  local cnn_learning_rate = opt.cnn_learning_rate --1e-5
+  if iter > opt.learning_rate_decay_start and opt.learning_rate_decay_start >= 0 then -- -1 dont decay learning rate
     local frac = (iter - opt.learning_rate_decay_start) / opt.learning_rate_decay_every
     local decay_factor = math.pow(0.5, frac)
     learning_rate = learning_rate * decay_factor -- set the decayed rate
     cnn_learning_rate = cnn_learning_rate * decay_factor
   end
 
-  -- perform a parameter update
+  -- perform a parameter update. in misc.optim_updates
   if opt.optim == 'rmsprop' then
     rmsprop(params, grad_params, learning_rate, opt.optim_alpha, opt.optim_epsilon, optim_state)
   elseif opt.optim == 'adagrad' then
@@ -371,8 +403,9 @@ while true do
     sgdm(params, grad_params, learning_rate, opt.optim_alpha, optim_state)
   elseif opt.optim == 'sgdmom' then
     sgdmom(params, grad_params, learning_rate, opt.optim_alpha, optim_state)
-  elseif opt.optim == 'adam' then
+  elseif opt.optim == 'adam' then -- here
     adam(params, grad_params, learning_rate, opt.optim_alpha, opt.optim_beta, opt.optim_epsilon, optim_state)
+    --                                           0.8              0.999           1e-8           
   else
     error('bad option opt.optim')
   end
@@ -383,8 +416,9 @@ while true do
       sgd(cnn_params, cnn_grad_params, cnn_learning_rate)
     elseif opt.cnn_optim == 'sgdm' then
       sgdm(cnn_params, cnn_grad_params, cnn_learning_rate, opt.cnn_optim_alpha, cnn_optim_state)
-    elseif opt.cnn_optim == 'adam' then
+    elseif opt.cnn_optim == 'adam' then -- here
       adam(cnn_params, cnn_grad_params, cnn_learning_rate, opt.cnn_optim_alpha, opt.cnn_optim_beta, opt.optim_epsilon, cnn_optim_state)
+      --                                                       0.8              0.999                   1e-8                              
     else
       error('bad option for opt.cnn_optim')
     end

@@ -12,17 +12,21 @@ function layer:__init(opt)
   parent.__init(self)
 
   -- options for core network
-  self.vocab_size = utils.getopt(opt, 'vocab_size') -- required
-  self.input_encoding_size = utils.getopt(opt, 'input_encoding_size')
-  self.rnn_size = utils.getopt(opt, 'rnn_size')
-  self.num_layers = utils.getopt(opt, 'num_layers', 1)
-  local dropout = utils.getopt(opt, 'dropout', 0)
+  self.vocab_size = utils.getopt(opt, 'vocab_size') -- required 9567
+  self.input_encoding_size = utils.getopt(opt, 'input_encoding_size') --512
+  self.rnn_size = utils.getopt(opt, 'rnn_size') --512
+  self.num_layers = utils.getopt(opt, 'num_layers', 1) --1
+  local dropout = utils.getopt(opt, 'dropout', 0) --0.5
+
   -- options for Language Model
-  self.seq_length = utils.getopt(opt, 'seq_length')
-  -- create the core lstm network. note +1 for both the START and END tokens
+  self.seq_length = utils.getopt(opt, 'seq_length') --16
+
+  -- create the core lstm network. note: +1 for both the START and END tokens
   self.core = LSTM.lstm(self.input_encoding_size, self.vocab_size + 1, self.rnn_size, self.num_layers, dropout)
   self.lookup_table = nn.LookupTable(self.vocab_size + 1, self.input_encoding_size)
   self:_createInitState(1) -- will be lazily resized later during forward passes
+
+  print(":: LanguageModel.init, Finish init LanguageModel")
 end
 
 function layer:_createInitState(batch_size)
@@ -44,14 +48,13 @@ end
 
 function layer:createClones()
   -- construct the net clones
-  --print('constructing clones inside the LanguageModel')
+  print('constructing clones inside the LanguageModel')
   self.clones = {self.core}
   self.lookup_tables = {self.lookup_table}
   for t=2,self.seq_length+2 do
     self.clones[t] = self.core:clone('weight', 'bias', 'gradWeight', 'gradBias')
     self.lookup_tables[t] = self.lookup_table:clone('weight', 'gradWeight')
   end
-  --print('LanguageModel Loaded')
 end
 
 function layer:getModulesList()
@@ -80,8 +83,12 @@ end
 
 function layer:training()
   if self.clones == nil then self:createClones() end -- create these lazily if needed
-  for k,v in pairs(self.clones) do v:training() end
-  for k,v in pairs(self.lookup_tables) do v:training() end
+  for k,v in pairs(self.clones) do 
+    v:training() 
+  end
+  for k,v in pairs(self.lookup_tables) do 
+    v:training() 
+  end
 end
 
 function layer:evaluate()
@@ -290,11 +297,11 @@ next token at every iteration of the LSTM (+2 because +1 for first dummy
 img forward, and another +1 because of START/END tokens shift)
 --]]
 function layer:updateOutput(input)
-  local imgs = input[1]
-  local seq = input[2]
+  local imgs = input[1] -- (16*5,512) 16个图,每个图扩展5个(和5个caption对齐),一个图512维图像特征
+  local seq = input[2] -- (16,16*5)  每个caption 16个单词, 16个图*每个图5个caption
   if self.clones == nil then self:createClones() end -- lazily create clones on first forward pass
 
-  assert(seq:size(1) == self.seq_length)
+  assert(seq:size(1) == self.seq_length) -- 确认seq的第一个维度是16, 跟seq_length相同, 表示每个caption的长度
   local batch_size = seq:size(2)
   self.output:resize(self.seq_length+2, batch_size, self.vocab_size+1)
   
