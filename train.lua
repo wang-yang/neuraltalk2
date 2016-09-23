@@ -144,25 +144,30 @@ end
 
 -- flatten and prepare all model parameters to a single vector. 
 -- Keep CNN params separate in case we want to try to get fancy with different optims on LM/CNN
-local params, grad_params = protos.lm:getParameters()
+local params, grad_params = protos.lm:getParameters() -- 是LanguageModel.lua中的parameters()
 local cnn_params, cnn_grad_params = protos.cnn:getParameters()
-print('total number of parameters in LM: ', params:nElement())
-print('total number of parameters in CNN: ', cnn_params:nElement())
+print('total number of parameters in LM: ', params:nElement()) -- 11908448
+print('total number of parameters in CNN: ', cnn_params:nElement()) --136358208
 assert(params:nElement() == grad_params:nElement())
 assert(cnn_params:nElement() == cnn_grad_params:nElement())
 
 -- construct thin module clones that share parameters with the actual
 -- modules. These thin module will have no intermediates and will be used
 -- for checkpointing to write significantly smaller checkpoint files
+-- thin_lm和thin_cnn与本尊module共享参数(weight, bias), 其余的中间态变量都不共享, 利用thin_lm/thin_cnn生成小体积的checkpoint files
 local thin_lm = protos.lm:clone()
 thin_lm.core:share(protos.lm.core, 'weight', 'bias') -- TODO: we are assuming that LM has specific members! figure out clean way to get rid of, not modular.
 thin_lm.lookup_table:share(protos.lm.lookup_table, 'weight', 'bias')
 local thin_cnn = protos.cnn:clone('weight', 'bias')
 
 -- sanitize all modules of gradient storage so that we dont save big checkpoints
+-- thin_cnn
 net_utils.sanitize_gradients(thin_cnn)
+-- thin_lm
 local lm_modules = thin_lm:getModulesList()
-for k,v in pairs(lm_modules) do net_utils.sanitize_gradients(v) end
+for k,v in pairs(lm_modules) do 
+  net_utils.sanitize_gradients(v) 
+end
 
 -- create clones and ensure parameter sharing. we have to do this 
 -- all the way here at the end because calls such as :cuda() and

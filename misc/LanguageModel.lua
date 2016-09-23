@@ -23,7 +23,9 @@ function layer:__init(opt)
 
   -- create the core lstm network. note: +1 for both the START and END tokens
   self.core = LSTM.lstm(self.input_encoding_size, self.vocab_size + 1, self.rnn_size, self.num_layers, dropout)
+  --                         512                  9567 + 1             512            1                0.5
   self.lookup_table = nn.LookupTable(self.vocab_size + 1, self.input_encoding_size)
+  --                                 9567 + 1             512
   self:_createInitState(1) -- will be lazily resized later during forward passes
 
   print(":: LanguageModel.init, Finish init LanguageModel")
@@ -61,16 +63,24 @@ function layer:getModulesList()
   return {self.core, self.lookup_table}
 end
 
-function layer:parameters()
-  -- we only have two internal modules, return their params
+function layer:parameters() -- 应该遍历所有的weights和gradWeights, 把它们都单一的tensor中返回
+  -- we only have two internal modules, return their params, LM中有两个内部modules
   local p1,g1 = self.core:parameters()
   local p2,g2 = self.lookup_table:parameters()
 
-  local params = {}
-  for k,v in pairs(p1) do table.insert(params, v) end
-  for k,v in pairs(p2) do table.insert(params, v) end
+  local params = {} -- 保存所有的weights
+  for k,v in pairs(p1) do 
+    print(":: LanguageModel:parameters(), p1 key:", k)
+    print(':: LanguageModel:parameters(), total number of parameters of above key: ', v:nElement()) -- 
+    table.insert(params, v) 
+  end
+  for k,v in pairs(p2) do 
+    print(":: LanguageModel:parameters(), p2 key:", k)
+    print(':: LanguageModel:parameters(), total number of parameters of above key: ', v:nElement()) -- 
+    table.insert(params, v) 
+  end
   
-  local grad_params = {}
+  local grad_params = {} -- 保存所有的gradWeights
   for k,v in pairs(g1) do table.insert(grad_params, v) end
   for k,v in pairs(g2) do table.insert(grad_params, v) end
 
@@ -78,7 +88,7 @@ function layer:parameters()
   -- what if someone outside of us decided to call getParameters() or something?
   -- (that would destroy our parameter sharing because clones 2...end would point to old memory)
 
-  return params, grad_params
+  return params, grad_params 
 end
 
 function layer:training()
@@ -107,7 +117,9 @@ function layer:sample(imgs, opt)
   local sample_max = utils.getopt(opt, 'sample_max', 1)
   local beam_size = utils.getopt(opt, 'beam_size', 1)
   local temperature = utils.getopt(opt, 'temperature', 1.0)
-  if sample_max == 1 and beam_size > 1 then return self:sample_beam(imgs, opt) end -- indirection for beam search
+  if sample_max == 1 and beam_size > 1 then 
+    return self:sample_beam(imgs, opt) 
+  end -- indirection for beam search
 
   local batch_size = imgs:size(1)
   self:_createInitState(batch_size)
@@ -302,8 +314,9 @@ function layer:updateOutput(input)
   if self.clones == nil then self:createClones() end -- lazily create clones on first forward pass
 
   assert(seq:size(1) == self.seq_length) -- 确认seq的第一个维度是16, 跟seq_length相同, 表示每个caption的长度
-  local batch_size = seq:size(2)
-  self.output:resize(self.seq_length+2, batch_size, self.vocab_size+1)
+  local batch_size = seq:size(2) -- 16*5, 16个图每个图5个caption
+  self.output:resize(self.seq_length+2, batch_size, self.vocab_size+1) --16+2, 16*5, 9567+1
+                --
   
   self:_createInitState(batch_size)
 
@@ -350,7 +363,7 @@ function layer:updateOutput(input)
       -- construct the inputs
       self.inputs[t] = {xt,unpack(self.state[t-1])}
       -- forward the network
-      local out = self.clones[t]:forward(self.inputs[t])
+      local out = self.clones[t]:forward(self.inputs[t]) -- 因为clones中都是LSTM, 这里实际调用了LSTM
       -- process the outputs
       self.output[t] = out[self.num_state+1] -- last element is the output vector
       self.state[t] = {} -- the rest is state
