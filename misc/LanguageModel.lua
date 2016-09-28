@@ -26,23 +26,23 @@ function layer:__init(opt)
   --                         512                  9567 + 1             512            1                0.5
   self.lookup_table = nn.LookupTable(self.vocab_size + 1, self.input_encoding_size)
   --                                 9567 + 1             512
-  self:_createInitState(1) -- will be lazily resized later during forward passes
+  self:_createInitState(1) -- will be lazily resized later during forward passes, 在forward()过程中会输入batch_size
 
   print(":: LanguageModel.init, Finish init LanguageModel")
 end
 
-function layer:_createInitState(batch_size)
+function layer:_createInitState(batch_size) -- batch_size=16*5, 初始化state, init_state作为forward时第一轮迭代的输入, 表示当前伴随输入xt的LSTM网络的cell_state和hidden_state
   assert(batch_size ~= nil, 'batch size must be provided')
   -- construct the initial state for the LSTM
   if not self.init_state then self.init_state = {} end -- lazy init
-  for h=1,self.num_layers*2 do
+  for h=1,self.num_layers*2 do -- self.num_layer=1
     -- note, the init state Must be zeros because we are using init_state to init grads in backward call too
-    if self.init_state[h] then
+    if self.init_state[h] then -- we have init_state[1], init_state[2], 每个都是(batch_size, rnn_size) (16*5, 512), init_state中的两个(80,512)分别表示的是cell_state, hidden_state
       if self.init_state[h]:size(1) ~= batch_size then
         self.init_state[h]:resize(batch_size, self.rnn_size):zero() -- expand the memory
       end
     else
-      self.init_state[h] = torch.zeros(batch_size, self.rnn_size)
+      self.init_state[h] = torch.zeros(batch_size, self.rnn_size) -- 都初始化成0
     end
   end
   self.num_state = #self.init_state
@@ -51,11 +51,11 @@ end
 function layer:createClones()
   -- construct the net clones
   print('constructing clones inside the LanguageModel')
-  self.clones = {self.core}
-  self.lookup_tables = {self.lookup_table}
-  for t=2,self.seq_length+2 do
-    self.clones[t] = self.core:clone('weight', 'bias', 'gradWeight', 'gradBias')
-    self.lookup_tables[t] = self.lookup_table:clone('weight', 'gradWeight')
+  self.clones = {self.core} -- core是LSTM, 参数个数, 7009632
+  self.lookup_tables = {self.lookup_table} -- 参数个数, (9567+1, 512), 4898816, lookup_table是做embedding的工作, 把单词word映射到512维的空间上, 每一个词对应512个权重
+  for t=2,self.seq_length+2 do -- 16+2
+    self.clones[t] = self.core:clone('weight', 'bias', 'gradWeight', 'gradBias') -- 共享weight, bias, gradWeight, gradBias
+    self.lookup_tables[t] = self.lookup_table:clone('weight', 'gradWeight') -- 共享weight, gradWeight
   end
 end
 
@@ -300,13 +300,16 @@ end
 
 --[[
 input is a tuple of:
-1. torch.Tensor of size NxK (K is dim of image code)
-2. torch.LongTensor of size DxN, elements 1..M
+1. torch.Tensor of size NxK (K is dim of image code), N=16*5, K=512
+2. torch.LongTensor of size DxN, elements 1..M,       D=16,   N=16*5
    where M = opt.vocab_size and D = opt.seq_length
 
 returns a (D+2)xNx(M+1) Tensor giving (normalized) log probabilities for the 
 next token at every iteration of the LSTM (+2 because +1 for first dummy 
 img forward, and another +1 because of START/END tokens shift)
+
+输出是(seq_length+2, 16图*5句, 9567+1) 
+
 --]]
 function layer:updateOutput(input)
   local imgs = input[1] -- (16*5,512) 16个图,每个图扩展5个(和5个caption对齐),一个图512维图像特征
@@ -315,12 +318,12 @@ function layer:updateOutput(input)
 
   assert(seq:size(1) == self.seq_length) -- 确认seq的第一个维度是16, 跟seq_length相同, 表示每个caption的长度
   local batch_size = seq:size(2) -- 16*5, 16个图每个图5个caption
-  self.output:resize(self.seq_length+2, batch_size, self.vocab_size+1) --16+2, 16*5, 9567+1
+  self.output:resize(self.seq_length+2, batch_size, self.vocab_size+1) --(16+2, 16*5, 9567+1)
                 --
   
   self:_createInitState(batch_size)
 
-  self.state = {[0] = self.init_state}
+  self.state = {[0] = self.init_state} -- 这样特意让state是从0开始的下标, state[0]就是init_state, 而init_state是两个(80,512)的table, 表示的是cell_state和hidden_state
   self.inputs = {}
   self.lookup_tables_inputs = {}
   self.tmax = 0 -- we will keep track of max sequence length encountered in the data for efficiency
@@ -329,17 +332,18 @@ function layer:updateOutput(input)
     local can_skip = false
     local xt
     if t == 1 then
-      -- feed in the images
-      xt = imgs -- NxK sized input
+      -- feed in the images, 这一轮循环只是初始化了xt
+      xt = imgs -- NxK sized input, (16*5, 512), 80个图, 每个图512维图像特征, 作为输入到LM模型的第一个输入
     elseif t == 2 then
       -- feed in the start tokens
-      local it = torch.LongTensor(batch_size):fill(self.vocab_size+1)
-      self.lookup_tables_inputs[t] = it
-      xt = self.lookup_tables[t]:forward(it) -- NxK sized input (token embedding vectors)
+      local it = torch.LongTensor(batch_size):fill(self.vocab_size+1) --batch_size=16*5, 每个都用9568来填充, 表示9568表示START/END, it是(80,1)
+      self.lookup_tables_inputs[t] = it -- lookup_tables_inputs[2] = it
+      xt = self.lookup_tables[t]:forward(it) -- NxK sized input (token embedding vectors), lookup_table (9567+1, 512)
+      -- it是一个1维Tensor, 长度80, it=[9568,...,9568], 输入到lookup_tables[2]的forward中, lookup_tables[2]是(9568, 512), 会返回(80,512)的tensor, 这80个512是维元素相同的, 每个都是lookup_table[2]的第9568号元素. xt是(80, 512), 表示的是t时刻的80个词对应的512维input encoding, 在t=2时, 实际上是START/END的512为input encoding
     else
       -- feed in the rest of the sequence...
-      local it = seq[t-2]:clone()
-      if torch.sum(it) == 0 then
+      local it = seq[t-2]:clone() --seq是(16词, 16图*5句), seq[t-2]:clone()得到的是16图*5句的第t-2个词, it是(16*5,1)
+      if torch.sum(it) == 0 then -- 表示没词了, 不需要再forward了
         -- computational shortcut for efficiency. All sequences have already terminated and only
         -- contain null tokens from here on. We can skip the rest of the forward pass and save time
         can_skip = true 
@@ -351,34 +355,38 @@ function layer:updateOutput(input)
         because we will carefully set the loss to zero at these places
         in the criterion, so computation based on this value will be noop for the optimization.
       --]]
-      it[torch.eq(it,0)] = 1
+      it[torch.eq(it,0)] = 1 -- 会把it中所有是0的换成1, 1表示的是arbitrary token
 
       if not can_skip then
-        self.lookup_tables_inputs[t] = it
-        xt = self.lookup_tables[t]:forward(it)
+        self.lookup_tables_inputs[t] = it -- it, (16*5,1)表是的是t时刻的输入词对应的token
+        xt = self.lookup_tables[t]:forward(it) -- xt是(80,512), 表示的是t时刻80个词对应的各自512维input encoding
       end
     end
 
     if not can_skip then
       -- construct the inputs
-      self.inputs[t] = {xt,unpack(self.state[t-1])}
-      -- forward the network
+      self.inputs[t] = {xt,unpack(self.state[t-1])} -- self.state[t-1] 是两个(80,512), 表示的是prev_c, prev_h, xt也是个(80,512), 最终的inputs[t]是[xt, prev_c, prev_h]
+      -- forward the network, 把t时刻的输入, 喂给t时刻对应的LSTM子层
       local out = self.clones[t]:forward(self.inputs[t]) -- 因为clones中都是LSTM, 这里实际调用了LSTM
+                                                         -- 输入给LSTM[t]的是{input(80,512),prev_c(80,512), prev_h(80,512)}
+                                                         -- 输出out是[cell_state, hidden_state, logsoft]
       -- process the outputs
-      self.output[t] = out[self.num_state+1] -- last element is the output vector
-      self.state[t] = {} -- the rest is state
-      for i=1,self.num_state do table.insert(self.state[t], out[i]) end
-      self.tmax = t
+      self.output[t] = out[self.num_state+1] -- last element is the output vector, num_state=2, out[3]是LM返回的logsoft, (80, 9568), 把logsoft放到最终的输出中
+      self.state[t] = {} -- the rest is state, 先清空state
+      for i=1,self.num_state do 
+        table.insert(self.state[t], out[i]) -- 把LSTM t子层的输出隐状态[cell_state, hidden_state]更新到state, 作为下一个LSTM子层的输入
+      end
+      self.tmax = t -- 记录下forward过程真正处理了几个单词, t最大不会超过seq_length(即16)
     end
-  end
+  end -- end of for loop
 
-  return self.output
+  return self.output -- (18,80,9568)
 end
 
 --[[
 gradOutput is an (D+2)xNx(M+1) Tensor.
 --]]
-function layer:updateGradInput(input, gradOutput)
+function layer:updateGradInput(input, gradOutput) -- input是{expanded_feats, data.labels}这个input这里没有用,只是保留形式上的统一(doc中说backward要输入跟forward一样的input,此步中真正有用的input在self.inputs中), gradOutput是dlogprobs(18.80,9568), 是protos.crit的backward的输出
   local dimgs -- grad on input images
 
   -- go backwards and lets compute gradients
@@ -386,13 +394,20 @@ function layer:updateGradInput(input, gradOutput)
   for t=self.tmax,1,-1 do
     -- concat state gradients and output vector gradients at time step t
     local dout = {}
-    for k=1,#dstate[t] do table.insert(dout, dstate[t][k]) end
-    table.insert(dout, gradOutput[t])
-    local dinputs = self.clones[t]:backward(self.inputs[t], dout)
+    for k=1,#dstate[t] do  -- dstate[t]有2个元素, 分别表示d_cell_state, d_hidden_state, 放入dout
+      table.insert(dout, dstate[t][k]) 
+    end
+    table.insert(dout, gradOutput[t]) -- dout中再加入gradOutput[t]
+
+    local dinputs = self.clones[t]:backward(self.inputs[t], dout) -- inputs[t]跟forward()中喂给LSTM[t]的输入一样[xt, cell_state, hidden_state], dout则是{d_cell_state, d_hidden_state, gradOutput[t]} , gradOutput[t]是(80,9568)
+    -- 这里dout是{d_cell_state, d_hidden_state, gradOutput[t]}的原因是LSTM[t]被定义为nngraph, 拥有了标准的forward和backward, 以及确定的输入和输出, 输入是input(80,512), cell_state_t-1(80,512), hidden_state_t-1(80,512), 输出是next_cell_state(80,512), next_hidden_state(80,512), logsoft(80,9568), 看doc标准backward的定义是[gradInput] backward(input, gradOutput), gradOutput表示gradient w.r.t the output of the module, 即与输出字段对应的其梯度, 所以dout是如上所示.
+
     -- split the gradient to xt and to state
     local dxt = dinputs[1] -- first element is the input vector
     dstate[t-1] = {} -- copy over rest to state grad
-    for k=2,self.num_state+1 do table.insert(dstate[t-1], dinputs[k]) end
+    for k=2,self.num_state+1 do 
+      table.insert(dstate[t-1], dinputs[k])  -- 看样子dinputs的第一个是dxt, 后两个分别是d_cell_state, d_hidden_state
+    end
     
     -- continue backprop of xt
     if t == 1 then
@@ -418,8 +433,8 @@ function crit:__init()
 end
 
 --[[
-input is a Tensor of size (D+2)xNx(M+1)
-seq is a LongTensor of size DxN. The way we infer the target
+input is a Tensor of size (D+2)xNx(M+1) (16+2)x80x(9567+1)
+seq is a LongTensor of size DxN (16x80). The way we infer the target 
 in this criterion is as follows:
 - at first time step the output is ignored (loss = 0). It's the image tick
 - the label sequence "seq" is shifted by one to produce targets
@@ -429,8 +444,8 @@ the gradients are properly set to zeros where appropriate.
 --]]
 function crit:updateOutput(input, seq)
   self.gradInput:resizeAs(input):zero() -- reset to zeros
-  local L,N,Mp1 = input:size(1), input:size(2), input:size(3)
-  local D = seq:size(1)
+  local L,N,Mp1 = input:size(1), input:size(2), input:size(3) -- L=18轮迭代, N=80个图片(caption句子个数, 由称为batch大小), Mp1=9568单词种类综述
+  local D = seq:size(1) -- D=16个单词
   assert(D == L-2, 'input Tensor should be 2 larger in time')
 
   local loss = 0
@@ -445,6 +460,7 @@ function crit:updateOutput(input, seq)
         target_index = 0
       else
         target_index = seq[{t-1,b}] -- t-1 is correct, since at t=2 START token was fed in and we want to predict first word (and 2-1 = 1).
+        -- target_index是t-1对应的时刻的单词id
       end
       -- the first time we see null token as next index, actually want the model to predict the END token
       if target_index == 0 and first_time then
@@ -455,16 +471,15 @@ function crit:updateOutput(input, seq)
       -- if there is a non-null next token, enforce loss!
       if target_index ~= 0 then
         -- accumulate loss
-        loss = loss - input[{ t,b,target_index }] -- log(p)
-        self.gradInput[{ t,b,target_index }] = -1
+        loss = loss - input[{ t,b,target_index }] -- log(p), input是(18,80,9568)表示的是第b个句子的第t个单词在target_index上的概率
+        self.gradInput[{ t,b,target_index }] = -1 -- 设置gradInput[t][b][target_index]=-1
         n = n + 1
       end
-
     end
   end
   self.output = loss / n -- normalize by number of predictions that were made
-  self.gradInput:div(n)
-  return self.output
+  self.gradInput:div(n) -- 每个元素都除以n, gradInput是(18,80,9568)的Tensor
+  return self.output --这个是loss
 end
 
 function crit:updateGradInput(input, seq)

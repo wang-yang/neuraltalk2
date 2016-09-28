@@ -113,7 +113,7 @@ else
   lmOpt.num_layers = 1
   lmOpt.dropout = opt.drop_prob_lm --0.5
   lmOpt.seq_length = loader:getSeqLength() --16
-  lmOpt.batch_size = opt.batch_size * opt.seq_per_img --16*5
+  lmOpt.batch_size = opt.batch_size * opt.seq_per_img --16*5, 其实这时不用把batch_size传入LanguageModel, 后面
   protos.lm = nn.LanguageModel(lmOpt) --初始化rnn(core是lstm)
 
   -- initialize the ConvNet
@@ -278,11 +278,13 @@ local function lossFun()
   local expanded_feats = protos.expander:forward(feats)
 
   -- forward the language model
-  local logprobs = protos.lm:forward{expanded_feats, data.labels} -- (16*5,512) 16个图,每个图扩展5个(和5个caption对齐),一个图512维图像特征
-                                                                  -- (16,16*5)  每个caption 16个单词, 16个图*每个图5个caption
+  local logprobs = protos.lm:forward{expanded_feats, data.labels} -- expanded_feats,(16*5,512) 16个图,每个图扩展5个(和5个caption对齐),一个图512维图像特征
+                                                                  -- data.labels, (16,16*5)  每个caption 16个单词, 16个图*每个图5个caption
+                                                                  -- 返回的是(18, 16*5, 9567+1), 返回的logprobs是18个元素的table, 每个table是(16*5, 9567+1), (1,16*5,9567+1)表示的是输入是图像特征时,80个图生成的句子下一个单词最有可能的是什么
+                                                                  -- (2,16*5,9567+1)是在(imgs,START)时80个图的生成句子下一个最有可能的单词, 以此类推。
 
   -- forward the language model criterion
-  local loss = protos.crit:forward(logprobs, data.labels)
+  local loss = protos.crit:forward(logprobs, data.labels) -- logprobs(18, 80, 9568), data.labels(16,80)
   
   -----------------------------------------------------------------------------
   -- Backward pass
@@ -290,10 +292,10 @@ local function lossFun()
   -- backprop criterion
   local dlogprobs = protos.crit:backward(logprobs, data.labels)
 
-  -- backprop language model
+  -- backprop language model, backward与forward会有相同的input
   local dexpanded_feats, ddummy = unpack(protos.lm:backward({expanded_feats, data.labels}, dlogprobs))
 
-  -- backprop the CNN, but only if we are finetuning
+  -- backprop the CNN, but only if we are finetuning, dexpanded_feats是图像特征的梯度
   if opt.finetune_cnn_after >= 0 and iter >= opt.finetune_cnn_after then
     local dfeats = protos.expander:backward(feats, dexpanded_feats)
     local dx = protos.cnn:backward(data.images, dfeats)
@@ -301,7 +303,7 @@ local function lossFun()
 
   -- clip gradients
   -- print(string.format('claming %f%% of gradients', 100*torch.mean(torch.gt(torch.abs(grad_params), opt.grad_clip))))
-  grad_params:clamp(-opt.grad_clip, opt.grad_clip)
+  grad_params:clamp(-opt.grad_clip, opt.grad_clip) -- 把grad_params限制在区间(-0.1, 0.1)
 
   -- apply L2 regularization
   if opt.cnn_weight_decay > 0 then

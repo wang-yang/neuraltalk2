@@ -124,9 +124,12 @@ function layer:updateOutput(input) --实际上做的是forward()工作, 把输�
 end
 
 function layer:updateGradInput(input, gradOutput)
-  if self.n == 1 then self.gradInput = gradOutput; return self.gradInput end -- act as noop for efficiency
+  if self.n == 1 then 
+    self.gradInput = gradOutput; 
+    return self.gradInput 
+  end -- act as noop for efficiency
   -- add up the gradients for each block of expanded features
-  self.gradInput:resizeAs(input)
+  self.gradInput:resizeAs(input) --(16,512)
   local d = input:size(2)
   for k=1,input:size(1) do
     local j = (k-1)*self.n+1
