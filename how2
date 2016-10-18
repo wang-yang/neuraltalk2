@@ -2,4 +2,7 @@ eval:
   th eval.lua -gpuid -1 -model model/model_id1-501-1448236541.t7_cpu.t7 -image_folder images/ -num_images 2
 web service:
   th webservice.lua -model model/model_id1-501-1448236541.t7_cpu.t7 -gpuid -1
+use docker(idc):
+  copy model from ceph into model/, and lunch it with:
+  th train.lua -input_h5 coco/cocotalk.h5 -input_json coco/cocotalk.json -language_eval 1 -gpuid 2 -finetune_cnn_after 0 -start_from model/model_id.t7 -checkpoint_path checkpoint > log 2>&1 &
   
